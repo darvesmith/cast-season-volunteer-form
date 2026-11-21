@@ -139,6 +139,7 @@
     <button type="button" class="backlink" id="forget" style="display:none" onclick="forgetDevice()">Not you? Forget this device</button>
 
     <button id="continue" class="action" type="button" onclick="goToPick()">Continue</button>
+    <button type="button" class="backlink" onclick="showCancel()">Need to cancel a signup you already made?</button>
     <div id="msg1" class="msg"></div>
   </div>
 
@@ -148,6 +149,7 @@
     <div class="welcome" id="welcome-text"></div>
     <button class="action" type="button" onclick="welcomeContinue()">Continue</button>
     <button type="button" class="backlink" onclick="welcomeSomeoneElse()">Log in as someone else</button>
+    <button type="button" class="backlink" onclick="showCancel()">Need to cancel a signup you already made?</button>
   </div>
 
   <!-- STEP 2: pick a production, night, and role; add more shows -->
@@ -190,6 +192,22 @@
     </div>
     <div id="msg3" class="msg"></div>
     <button type="button" class="backlink" onclick="goToDetails()">&larr; Back to your details</button>
+  </div>
+
+  <!-- CANCEL: cancel a confirmed signup (after submit). This is a
+       separate flow from the "Remove" link in "Your signups" above,
+       which only drops a signup from the pending batch before submit. -->
+  <div id="step-cancel" style="display:none">
+    <h1>Cancel a signup</h1>
+    <p class="intro">Enter the email you signed up with to see your confirmed signups. Cancelling frees the spot for someone else right away.</p>
+    <label class="field"><span>Email</span><input id="cancel-email" type="email" autocomplete="email"></label>
+    <button id="find-signups" class="action" type="button" onclick="findMySignups()">Find my signups</button>
+    <div id="msg-cancel" class="msg"></div>
+    <div id="cancel-box" class="picked" style="display:none">
+      <h3>Your confirmed signups</h3>
+      <ul id="cancel-list"></ul>
+    </div>
+    <button type="button" class="backlink" onclick="cancelBack()">&larr; Back to sign up</button>
   </div>
 
   <!-- STEP 3: confirmation only -->
@@ -728,6 +746,138 @@
     var done = document.getElementById('step-done');
     done.style.display = 'block';
     if (done.scrollIntoView) done.scrollIntoView();
+  }
+
+  // ---- Cancel a confirmed signup (after submit) ----
+  // Separate from removeSignup() above, which only drops a signup from
+  // the pending batch before submit. Here the signup is already on the
+  // sheet: look it up by email, confirm inline, and the backend deletes
+  // exactly that response row (the Counts formulas reopen the spot).
+  var myConfirmed = []; // confirmed signups from getMySignups
+
+  function showCancel() {
+    document.getElementById('step-details').style.display = 'none';
+    document.getElementById('step-welcome').style.display = 'none';
+    document.getElementById('step-pick').style.display = 'none';
+    document.getElementById('step-done').style.display = 'none';
+    var email = document.getElementById('email').value.trim() || getRememberedEmail();
+    if (email) document.getElementById('cancel-email').value = email;
+    showMsg('msg-cancel', '', '');
+    document.getElementById('cancel-box').style.display = 'none';
+    document.getElementById('cancel-list').innerHTML = '';
+    var c = document.getElementById('step-cancel');
+    c.style.display = 'block';
+    if (c.scrollIntoView) c.scrollIntoView();
+  }
+
+  function cancelBack() {
+    document.getElementById('step-cancel').style.display = 'none';
+    var details = document.getElementById('step-details');
+    details.style.display = 'block';
+    document.getElementById('forget').style.display = getRememberedEmail() ? 'inline' : 'none';
+    if (details.scrollIntoView) details.scrollIntoView();
+  }
+
+  function findMySignups() {
+    var email = document.getElementById('cancel-email').value.trim();
+    if (!email || email.indexOf('@') < 1) { showMsg('msg-cancel', 'Please enter the email you signed up with.', 'err'); return; }
+    var btn = document.getElementById('find-signups');
+    btn.disabled = true;
+    btn.textContent = 'Finding…';
+    showMsg('msg-cancel', '', '');
+    apiCall('getMySignups', { email: email }, function (res) {
+      btn.disabled = false;
+      btn.textContent = 'Find my signups';
+      if (!res || !res.ok) {
+        showMsg('msg-cancel', (res && res.error) || 'Something went wrong. Please try again.', 'err');
+        return;
+      }
+      myConfirmed = res.signups || [];
+      renderCancelList();
+      if (!myConfirmed.length) showMsg('msg-cancel', 'No signups found for that email.', '');
+    }, function () {
+      btn.disabled = false;
+      btn.textContent = 'Find my signups';
+      showMsg('msg-cancel', 'Something went wrong. Please try again.', 'err');
+    });
+  }
+
+  function renderCancelList() {
+    var box = document.getElementById('cancel-box');
+    var list = document.getElementById('cancel-list');
+    list.innerHTML = '';
+    if (!myConfirmed.length) { box.style.display = 'none'; return; }
+    myConfirmed.forEach(function (s, i) {
+      var li = document.createElement('li');
+      var txt = document.createElement('span');
+      txt.className = 'txt';
+      var b = document.createElement('b');
+      b.textContent = s.productionLabel;
+      txt.appendChild(b);
+      txt.appendChild(document.createTextNode(' — ' + (s.display || s.night) + ' — ' + s.role));
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = 'Cancel';
+      btn.addEventListener('click', function () { confirmCancel(i, li); });
+      li.appendChild(txt);
+      li.appendChild(btn);
+      list.appendChild(li);
+    });
+    box.style.display = 'block';
+  }
+
+  // Inline confirm: the row turns into the question with Yes / Keep it.
+  function confirmCancel(i, li) {
+    var s = myConfirmed[i];
+    li.innerHTML = '';
+    var txt = document.createElement('span');
+    txt.className = 'txt';
+    txt.textContent = 'Cancel ' + s.role + ' on ' + (s.display || s.night) + '?';
+    li.appendChild(txt);
+    var yes = document.createElement('button');
+    yes.type = 'button';
+    yes.textContent = 'Yes, cancel it';
+    yes.addEventListener('click', function () { doCancel(i); });
+    li.appendChild(yes);
+    var no = document.createElement('button');
+    no.type = 'button';
+    no.textContent = 'Keep it';
+    no.addEventListener('click', function () { renderCancelList(); });
+    li.appendChild(no);
+  }
+
+  function doCancel(i) {
+    var s = myConfirmed[i];
+    var email = document.getElementById('cancel-email').value.trim();
+    showMsg('msg-cancel', 'Cancelling…', '');
+    apiCall('cancelSignup',
+      { email: email, production: s.production, row: String(s.row) },
+      function (res) {
+        if (!res || !res.ok) {
+          showMsg('msg-cancel', (res && res.error) || 'Something went wrong. Please try again.', 'err');
+          renderCancelList();
+          return;
+        }
+        showMsg('msg-cancel', 'Cancelled — the spot is open again.', '');
+        refreshMySignups();
+        loadAvailability(); // fresh counts for the sign-up step
+      },
+      function () {
+        showMsg('msg-cancel', 'Something went wrong. Please try again.', 'err');
+        renderCancelList();
+      });
+  }
+
+  // Re-fetch the list after a cancel (rows shift when one is deleted, so
+  // the row numbers must be fresh). Leaves the confirmation message alone.
+  function refreshMySignups() {
+    var email = document.getElementById('cancel-email').value.trim();
+    if (!email) return;
+    apiCall('getMySignups', { email: email }, function (res) {
+      if (!res || !res.ok) return;
+      myConfirmed = res.signups || [];
+      renderCancelList();
+    }, function () {});
   }
 
   // Look up saved details when the email field is left (returning volunteer).
