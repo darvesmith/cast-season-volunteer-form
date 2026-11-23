@@ -38,6 +38,9 @@
   }
   .role input { width: 20px; height: 20px; flex: none; accent-color: #990000; }
   .role .rname { flex: 1; }
+  .role .rtext { flex: 1; min-width: 0; }
+  .role .rdesc { font-size: 13px; color: #555; margin-top: 2px; }
+  .role .signedup { font-size: 13px; color: #555; margin-top: 2px; }
   .role .spots { font-size: 14px; color: #555; white-space: nowrap; }
   .role .spots.low { color: #990000; font-weight: 700; }
   .role:has(input:checked) { border-color: #990000; background: #fdf6f6; }
@@ -147,6 +150,11 @@
   <div id="step-welcome" style="display:none">
     <h1>Welcome back</h1>
     <div class="welcome" id="welcome-text"></div>
+    <div id="welcome-signups-box" class="picked" style="display:none">
+      <h3>Your signups</h3>
+      <ul id="welcome-signups-list"></ul>
+    </div>
+    <div id="msg-welcome" class="msg"></div>
     <button class="action" type="button" onclick="welcomeContinue()">Continue</button>
     <button type="button" class="backlink" onclick="welcomeSomeoneElse()">Log in as someone else</button>
     <button type="button" class="backlink" onclick="showCancel()">Need to cancel a signup you already made?</button>
@@ -297,6 +305,42 @@
     return mySignups.some(function (s) { return signupKey(s) === productionId + '|' + night + '|' + role; });
   }
 
+  // Role descriptions (Darve-approved wording, Nov 23, 2026) — the same
+  // five roles for every production, so one description each.
+  var ROLE_DESCRIPTIONS = {
+    'Concession Stand': 'Sell concessions before the show and at intermission.',
+    'Usher': 'Show patrons to their seats and hand out programs.',
+    'Helper (Wherever Needed)': 'Fill in wherever help is needed that night.',
+    'Ticket Scanner': 'Scan tickets as patrons arrive.',
+    'Door Greeter': 'Greet patrons at the door as they arrive.'
+  };
+
+  // Names already signed up per night, keyed "productionId|night", from
+  // getPublicSignups — first name + last initial only, never contact
+  // details. Filled in under each role after the role list renders.
+  var roleNamesCache = {};
+
+  function loadRoleNames(prod, entry, signedupEls) {
+    var key = prod.id + '|' + entry.night;
+    var cached = roleNamesCache[key];
+    if (cached) { fillRoleNames(cached, signedupEls); return; }
+    apiCall('getPublicSignups', { production: prod.id, night: entry.night }, function (res) {
+      if (!res || !res.ok || !res.names) return;
+      roleNamesCache[key] = res.names;
+      // Only fill if the volunteer is still looking at this night.
+      if (selectedProd === prod.id && selectedNight === entry.night) fillRoleNames(res.names, signedupEls);
+    }, function () {});
+  }
+
+  function fillRoleNames(names, signedupEls) {
+    Object.keys(signedupEls).forEach(function (role) {
+      var list = (names && names[role]) || [];
+      var el = signedupEls[role];
+      el.textContent = list.length ? 'Signed up: ' + list.join(', ') : '';
+      el.style.display = list.length ? 'block' : 'none';
+    });
+  }
+
   function loadAvailability(onDone) {
     apiCall('getAvailability', {}, function (res) {
       if (!res || !res.ok || !res.productions) {
@@ -411,6 +455,7 @@
       return;
     }
     hint.textContent = 'Pick one role for ' + entry.display + '.';
+    var signedupEls = {};
     open.forEach(function (r) {
       var taken = alreadyPicked(prod.id, entry.night, r.name);
       var label = document.createElement('label');
@@ -422,17 +467,33 @@
       if (taken) rb.disabled = true;
       if (r.name === selectedRole) rb.checked = true;
       rb.addEventListener('change', function () { selectedRole = r.name; updateAddButton(); });
+      var tx = document.createElement('div');
+      tx.className = 'rtext';
       var nm = document.createElement('span');
       nm.className = 'rname';
       nm.textContent = r.name + (taken ? ' — already in your list' : '');
+      tx.appendChild(nm);
+      var desc = ROLE_DESCRIPTIONS[r.name];
+      if (desc) {
+        var dd = document.createElement('div');
+        dd.className = 'rdesc';
+        dd.textContent = desc;
+        tx.appendChild(dd);
+      }
+      var su = document.createElement('div');
+      su.className = 'signedup';
+      su.style.display = 'none';
+      tx.appendChild(su);
+      signedupEls[r.name] = su;
       var sp = document.createElement('span');
       sp.className = 'spots' + (r.open === 1 ? ' low' : '');
       sp.textContent = spotsLabel(r.open);
       label.appendChild(rb);
-      label.appendChild(nm);
+      label.appendChild(tx);
       label.appendChild(sp);
       box.appendChild(label);
     });
+    loadRoleNames(prod, entry, signedupEls);
     fs.style.display = 'block';
     updateAddButton();
     if (fs.scrollIntoView) fs.scrollIntoView();
@@ -519,6 +580,92 @@
     var w = document.getElementById('step-welcome');
     w.style.display = 'block';
     if (w.scrollIntoView) w.scrollIntoView();
+    loadWelcomeSignups(email);
+  }
+
+  // Confirmed signups on the welcome step (Darve, Nov 23, 2026): the
+  // volunteer sees the roles they already selected, with a Cancel
+  // button beside each — same as the Premiere form.
+  var welcomeSignups = [];
+  var welcomeEmail = '';
+
+  function loadWelcomeSignups(email) {
+    welcomeEmail = email;
+    var box = document.getElementById('welcome-signups-box');
+    var list = document.getElementById('welcome-signups-list');
+    list.innerHTML = '';
+    box.style.display = 'none';
+    showMsg('msg-welcome', '', '');
+    apiCall('getMySignups', { email: email }, function (res) {
+      if (!res || !res.ok) return;
+      welcomeSignups = res.signups || [];
+      renderWelcomeSignups();
+    }, function () {});
+  }
+
+  function renderWelcomeSignups() {
+    var box = document.getElementById('welcome-signups-box');
+    var list = document.getElementById('welcome-signups-list');
+    list.innerHTML = '';
+    if (!welcomeSignups.length) { box.style.display = 'none'; return; }
+    welcomeSignups.forEach(function (s, i) {
+      var li = document.createElement('li');
+      var txt = document.createElement('span');
+      txt.className = 'txt';
+      var b = document.createElement('b');
+      b.textContent = s.productionLabel;
+      txt.appendChild(b);
+      txt.appendChild(document.createTextNode(' — ' + (s.display || s.night) + ' — ' + s.role));
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = 'Cancel';
+      btn.addEventListener('click', function () { confirmWelcomeCancel(i, li); });
+      li.appendChild(txt);
+      li.appendChild(btn);
+      list.appendChild(li);
+    });
+    box.style.display = 'block';
+  }
+
+  // Inline confirm: the row turns into the question with Yes / Keep it.
+  function confirmWelcomeCancel(i, li) {
+    var s = welcomeSignups[i];
+    li.innerHTML = '';
+    var txt = document.createElement('span');
+    txt.className = 'txt';
+    txt.textContent = 'Cancel ' + s.role + ' on ' + (s.display || s.night) + '?';
+    li.appendChild(txt);
+    var yes = document.createElement('button');
+    yes.type = 'button';
+    yes.textContent = 'Yes, cancel it';
+    yes.addEventListener('click', function () { doWelcomeCancel(i); });
+    li.appendChild(yes);
+    var no = document.createElement('button');
+    no.type = 'button';
+    no.textContent = 'Keep it';
+    no.addEventListener('click', function () { renderWelcomeSignups(); });
+    li.appendChild(no);
+  }
+
+  function doWelcomeCancel(i) {
+    var s = welcomeSignups[i];
+    showMsg('msg-welcome', 'Cancelling…', '');
+    apiCall('cancelSignup',
+      { email: welcomeEmail, production: s.production, row: String(s.row) },
+      function (res) {
+        if (!res || !res.ok) {
+          showMsg('msg-welcome', (res && res.error) || 'Something went wrong. Please try again.', 'err');
+          renderWelcomeSignups();
+          return;
+        }
+        showMsg('msg-welcome', 'Cancelled — the spot is open again.', '');
+        loadWelcomeSignups(welcomeEmail);
+        loadAvailability(); // fresh counts for the sign-up step
+      },
+      function () {
+        showMsg('msg-welcome', 'Something went wrong. Please try again.', 'err');
+        renderWelcomeSignups();
+      });
   }
   function welcomeContinue() {
     document.getElementById('step-welcome').style.display = 'none';
