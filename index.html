@@ -589,13 +589,16 @@
   var welcomeSignups = [];
   var welcomeEmail = '';
 
-  function loadWelcomeSignups(email) {
+  function loadWelcomeSignups(email, keepMsg) {
     welcomeEmail = email;
     var box = document.getElementById('welcome-signups-box');
     var list = document.getElementById('welcome-signups-list');
     list.innerHTML = '';
     box.style.display = 'none';
-    showMsg('msg-welcome', '', '');
+    // keepMsg: after a cancel, the "Cancelled — the spot is open again."
+    // message must survive the refresh (the step-cancel flow's
+    // refreshMySignups leaves its message alone for the same reason).
+    if (!keepMsg) showMsg('msg-welcome', '', '');
     apiCall('getMySignups', { email: email }, function (res) {
       if (!res || !res.ok) return;
       welcomeSignups = res.signups || [];
@@ -659,7 +662,7 @@
           return;
         }
         showMsg('msg-welcome', 'Cancelled — the spot is open again.', '');
-        loadWelcomeSignups(welcomeEmail);
+        loadWelcomeSignups(welcomeEmail, true); // keep the message above
         loadAvailability(); // fresh counts for the sign-up step
       },
       function () {
